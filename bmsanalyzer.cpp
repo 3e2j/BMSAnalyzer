@@ -229,7 +229,10 @@ struct TrackParser {
                     case J2_SET_PROG: {
                         uint8_t prog = hexData[curOffset++];
                         onEvent();
-                        setProgram(prog);
+                        // Only run program if it isn't followed up by another program change
+                        if (hexData[curOffset] != J2_SET_PROG) {
+                            setProgram(prog);
+                        }
                         break;
                     }
                     case J2_SET_PERF_8: {
@@ -499,7 +502,7 @@ struct TrackParser {
         // Remove the "last track" (scanned along with first track)
         trackList.pop_back(); 
 
-        for (size_t i = 0; i < trackList.size(); i++) {
+        for (size_t i = 1; i < trackList.size(); i++) {
             uint32_t nextTrackStart;
             if (i < trackList.size() - 1) {
                 nextTrackStart = std::get<1>(trackList[i + 1]);
@@ -517,6 +520,10 @@ struct TrackParser {
     uint32_t accumulatedWaitTime = 0;
     uint32_t previousEventTimestamp = 0;
 
+    std::vector<std::tuple<uint8_t, uint8_t>> midiMappings; // Pitch Setup checking can be added later
+    int currentMidiMapping;
+    uint8_t statusNum = 0x00;
+
     void writeMIDIData(const std::vector<unsigned char>& eventData) {
         midiData.insert(midiData.end(), eventData.begin(), eventData.end());
     }
@@ -530,9 +537,8 @@ struct TrackParser {
     }
 
     size_t trackStartMarker = 0;
-
+    
     void handleTrackPoints() {
-
         // Write the track end
         std::vector<unsigned char> trackEnd = {0x00, 0xFF, 0x2F, 0x00};
         writeMIDIData(trackEnd);
@@ -540,7 +546,7 @@ struct TrackParser {
         // MIDI track header (length accounts for track end)
         std::vector<unsigned char> trackHeader = {
             'M', 'T', 'r', 'k',
-            static_cast<unsigned char>((midiData.size() - trackStartMarker) >> 24 & 0xFF), // +4 to account for track end data
+            static_cast<unsigned char>((midiData.size() - trackStartMarker) >> 24 & 0xFF),
             static_cast<unsigned char>((midiData.size() - trackStartMarker) >> 16 & 0xFF),
             static_cast<unsigned char>((midiData.size() - trackStartMarker) >> 8 & 0xFF),
             static_cast<unsigned char>((midiData.size() - trackStartMarker) & 0xFF),
@@ -568,6 +574,53 @@ struct TrackParser {
         return convertToVLQ(deltaTime);
     }
 
+    void setProgram(uint8_t program) {
+        uint8_t bank = program / 128;
+        uint8_t actualProgram = program - 128 * bank;
+        bank += 0x16;
+
+        // Assumed that program select is always first in the track
+        // Check if the MIDI mapping already exists in the list
+        bool mappingExists = false;
+        uint8_t existingStatusNum = 0x00;
+
+        for (const auto& mapping : midiMappings) {
+            if (std::get<1>(mapping) == program) {
+                mappingExists = true;
+                existingStatusNum = std::get<0>(mapping);
+                break;
+            }
+        }
+
+        if (!mappingExists) {
+            // Determine the new statusNum based on the last statusNum in the vector
+            uint8_t newStatusNum = midiMappings.empty() ? 0x00 : (std::get<0>(midiMappings.back()) + 1);
+
+            // Add the MIDI mapping to the global list
+            midiMappings.push_back(std::make_tuple(newStatusNum, program));
+
+            // Use the newly determined statusNum
+            statusNum = newStatusNum;
+        } else {
+            // Use the existing statusNum from the list
+            statusNum = existingStatusNum;
+        }
+
+        // MIDI bank select event
+        std::vector<unsigned char> bankSelectEvent = calculateDeltaTime();
+        bankSelectEvent.push_back(0xB0 + statusNum);
+        bankSelectEvent.push_back(0x00);
+        bankSelectEvent.push_back(bank);
+
+        // MIDI program change event
+        std::vector<unsigned char> programChangeEvent = calculateDeltaTime();
+        programChangeEvent.push_back(0xC0 + statusNum);
+        programChangeEvent.push_back(actualProgram);
+
+        writeMIDIData(bankSelectEvent);
+        writeMIDIData(programChangeEvent);
+    }
+
     void handleNoteOn(uint8_t note, uint8_t velocity) {
 
         // Find if the same note is already being played
@@ -592,7 +645,7 @@ struct TrackParser {
         // Check if an available voice ID was found
         if (voice < 8) {
             // Create MIDI note-on event
-            uint8_t statusByte = 0x90 + trackNum;
+            uint8_t statusByte = 0x90 + statusNum;
 
             // Create the MIDI note-on event data
             std::vector<unsigned char> eventData = calculateDeltaTime();  // Delta time
@@ -615,7 +668,7 @@ struct TrackParser {
             voiceToNote[voice - 1] = 0;
 
             // Create MIDI note-off event
-            uint8_t statusByte = 0x80 + trackNum;
+            uint8_t statusByte = 0x80 + statusNum;
 
             // Create the MIDI note-off event data
             std::vector<unsigned char> eventData = calculateDeltaTime();  // Delta time
@@ -630,7 +683,7 @@ struct TrackParser {
 
     void turnOffRemainingNotes() {
         std::vector<unsigned char> eventData = calculateDeltaTime();  // Delta time
-        eventData.push_back(0xB0 + trackNum);
+        eventData.push_back(0xB0 + statusNum);
         eventData.push_back(0x7B);
         eventData.push_back(0x00);  // Velocity is set to 0 for note-off
 
@@ -663,7 +716,7 @@ struct TrackParser {
     void setVolume(uint8_t volume) {
         // MIDI control change event for volume
         std::vector<unsigned char> volumeEvent = calculateDeltaTime();
-        volumeEvent.push_back(0xB0 + trackNum);
+        volumeEvent.push_back(0xB0 + statusNum);
         volumeEvent.push_back(0x07);
         volumeEvent.push_back(volume);
 
@@ -676,7 +729,7 @@ struct TrackParser {
 
         if (!isPitchSetup) {
             /* Not too sure if other games BMS files require a pitch adjustment, but the TP soundfont does. */
-            uint8_t statusByte = 0xB0 + trackNum;
+            uint8_t statusByte = 0xB0 + statusNum;
 
             std::vector<unsigned char> pitchSetup = calculateDeltaTime();
             pitchSetup.insert(pitchSetup.end(), {
@@ -708,7 +761,7 @@ struct TrackParser {
         uint8_t msb = static_cast<uint8_t>((midiPitch >> 7) & 0x7F);
 
         std::vector<unsigned char> pitchEvent = calculateDeltaTime();
-        pitchEvent.push_back(0xE0 + trackNum);
+        pitchEvent.push_back(0xE0 + statusNum);
         pitchEvent.push_back(lsb);       // Pitch bend LSB
         pitchEvent.push_back(msb);       // Pitch bend MSB
 
@@ -718,7 +771,7 @@ struct TrackParser {
     void setReverb(uint8_t value) {
         // MIDI control change event for reverb (not sustain)
         std::vector<unsigned char> reverbEvent = calculateDeltaTime();
-        reverbEvent.push_back(0xB0 + trackNum);
+        reverbEvent.push_back(0xB0 + statusNum);
         reverbEvent.push_back(0x5B);
         reverbEvent.push_back(value);
 
@@ -728,31 +781,11 @@ struct TrackParser {
     void addPan(uint8_t pan) {
         // MIDI control change event for pan
         std::vector<unsigned char> panEvent = calculateDeltaTime();
-        panEvent.push_back(0xB0 + trackNum);
+        panEvent.push_back(0xB0 + statusNum);
         panEvent.push_back(0x0A);
         panEvent.push_back(pan);
 
         writeMIDIData(panEvent);
-    }
-
-    void setProgram(uint8_t program) {
-        uint8_t bank = program / 128;
-        uint8_t actualProgram = program - 128 * bank;
-        bank += 0x16;
-
-        // MIDI bank select event
-        std::vector<unsigned char> bankSelectEvent = calculateDeltaTime();
-        bankSelectEvent.push_back(0xB0 + trackNum);
-        bankSelectEvent.push_back(0x00);
-        bankSelectEvent.push_back(bank);
-
-        // MIDI program change event
-        std::vector<unsigned char> programChangeEvent = calculateDeltaTime();
-        programChangeEvent.push_back(0xC0 + trackNum);
-        programChangeEvent.push_back(actualProgram);
-
-        writeMIDIData(bankSelectEvent);
-        writeMIDIData(programChangeEvent);
     }
 
     void trackReset() {
@@ -772,12 +805,12 @@ struct TrackParser {
 
         getTrackPointers();
 
-        // std::cout << "Track List:" << std::endl;
-        // for (const auto& track : trackList) {
-        //     std::cout << "Track No: " << static_cast<int>(std::get<0>(track))
-        //               << ", Track Start: " << static_cast<int>(std::get<1>(track))
-        //               << ", Track End: " << static_cast<int>(std::get<2>(track)) << std::endl;
-        // }
+        std::cout << "Track List:" << std::endl;
+        for (const auto& track : trackList) {
+            std::cout << "Track No: " << static_cast<int>(std::get<0>(track))
+                      << ", Track Start: " << static_cast<int>(std::get<1>(track))
+                      << ", Track End: " << static_cast<int>(std::get<2>(track)) << std::endl;
+        }
 
         for (const auto& track : trackList) {
             // Makes hexcode neater, but also prevents track 0's error code being 255
@@ -792,7 +825,6 @@ struct TrackParser {
 
         handleMIDIHeader(); // Add header
         finalizeMIDIFile();
-
         std::cout << "BMS file converted." << std::endl;
 
     }
