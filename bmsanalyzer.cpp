@@ -111,6 +111,8 @@ enum EffectType {
     MML_EFFECT_UNKNOWN = 4
 };
 
+std::vector<std::tuple<uint8_t, uint8_t>> trackInstruments;
+
 struct TrackParser {
     std::vector<unsigned char> hexData;
     uint32_t curOffset;
@@ -137,6 +139,8 @@ struct TrackParser {
 
     uint8_t trackNum = 0x00;
 
+    bool firstTrack = true;
+
     /*Track Decoding*/
     void parseEvents(uint32_t trackStart, uint32_t trackEnd) {
 
@@ -156,12 +160,17 @@ struct TrackParser {
                 uint8_t velocity = hexData[curOffset++];
 
                 if (voice <= 0x01 && voice >= 0x08) {
-                        std::cout << "ERROR: A Note byte could not be read." << std::endl;
-                        std::cout << "Track Number: " << static_cast<int>(trackNum) << std::endl;
-                        std::cout << "Previous Byte: 0x" << std::hex << static_cast<int>(hexData[curOffset-2]) << std::endl;
-                        std::cout << "Status Byte: 0x" << std::hex << static_cast<int>(status_byte) << std::endl;
-                        std::cout << "Offset: 0x" << std::hex << static_cast<int>(curOffset) << std::endl;
-                        throw;
+                        if (firstTrack) {
+                            firstTrackErrorHandling(status_byte);
+                            return;
+                        } else {
+                            std::cout << "! ERROR: A Note byte could not be read. !" << std::endl;
+                            std::cout << "Track Number: " << static_cast<int>(trackNum) << std::endl;
+                            std::cout << "Previous Byte: 0x" << std::hex << static_cast<int>(hexData[curOffset-2]) << std::endl;
+                            std::cout << "Status Byte: 0x" << std::hex << static_cast<int>(status_byte) << std::endl;
+                            std::cout << "Offset: 0x" << std::hex << static_cast<int>(curOffset) << std::endl;
+                            throw;
+                        }
                 };
 
                 onEvent();
@@ -346,12 +355,17 @@ struct TrackParser {
                     // }
 
                     default: {
-                        std::cout << "ERROR: A byte could not be read." << std::endl;
-                        std::cout << "Track Number: " << static_cast<int>(trackNum) << std::endl;
-                        std::cout << "Status Byte: 0x" << std::hex << static_cast<int>(status_byte) << std::endl;
-                        std::cout << "Previous Byte: 0x" << std::hex << static_cast<int>(hexData[curOffset -2]) << std::endl;
-                        std::cout << "Offset: 0x" << std::hex << static_cast<int>(curOffset) << std::endl;
-                        return;
+                        if (firstTrack) {
+                            firstTrackErrorHandling(status_byte);
+                            return;
+                        } else {
+                            std::cout << "! ERROR: A byte could not be read. !" << std::endl;
+                            std::cout << "Track Number: " << static_cast<int>(trackNum) << std::endl;
+                            std::cout << "Status Byte: 0x" << std::hex << static_cast<int>(status_byte) << std::endl;
+                            std::cout << "Previous Byte: 0x" << std::hex << static_cast<int>(hexData[curOffset -2]) << std::endl;
+                            std::cout << "Offset: 0x" << std::hex << static_cast<int>(curOffset) << std::endl;
+                            return;
+                        }
                     }
                 }
             }
@@ -376,7 +390,7 @@ struct TrackParser {
                 std::cout << "Notice: Encountered an effect parameter of 0x04 that isn't a 0 byte; 0x" << std::hex << static_cast<int>(value) << std::endl;
             }
         } else {
-            std::cout << "ERROR: SetPerf found a unknown byte." << std::endl;
+            std::cout << "! ERROR: SetPerf found a unknown byte. !" << std::endl;
             std::cout << "Track Number: " << static_cast<int>(trackNum) << std::endl;
             std::cout << "Byte Type: 0x" << std::hex << static_cast<int>(type) << std::endl;
             std::cout << "Value Byte: 0x" << std::hex << static_cast<int>(value) << std::endl;
@@ -513,6 +527,13 @@ struct TrackParser {
         }
     }
 
+    void firstTrackErrorHandling(uint8_t status_byte) {
+            std::cout << "Notice: A byte could not be read on the inital track." << std::endl;
+            std::cout << "File will still be converted, inital track bytes is yet to be deciphered." << std::endl;
+            std::cout << "Status Byte: 0x" << std::hex << static_cast<int>(status_byte) << std::endl;
+            std::cout << "Offset: 0x" << std::hex << static_cast<int>(curOffset) << std::endl;
+    }
+
     /*Midi Creation*/
 
     std::ofstream outputFile;
@@ -605,6 +626,8 @@ struct TrackParser {
             // Use the existing statusNum from the list
             statusNum = existingStatusNum;
         }
+
+        trackInstruments.push_back(std::make_tuple(trackNum, program));
 
         // MIDI bank select event
         std::vector<unsigned char> bankSelectEvent = calculateDeltaTime();
@@ -797,6 +820,7 @@ struct TrackParser {
         VisitedAddressMax = 0;
         trackStartMarker = midiData.size();
         isPitchSetup = false;
+        firstTrack = false;
     }
 
     /*Main Run*/
@@ -805,12 +829,12 @@ struct TrackParser {
 
         getTrackPointers();
 
-        std::cout << "Track List:" << std::endl;
-        for (const auto& track : trackList) {
-            std::cout << "Track No: " << static_cast<int>(std::get<0>(track))
-                      << ", Track Start: " << static_cast<int>(std::get<1>(track))
-                      << ", Track End: " << static_cast<int>(std::get<2>(track)) << std::endl;
-        }
+        // std::cout << "Track List:" << std::endl;
+        // for (const auto& track : trackList) {
+        //     std::cout << "Track No: " << static_cast<int>(std::get<0>(track))
+        //               << ", Track Start: " << static_cast<int>(std::get<1>(track))
+        //               << ", Track End: " << static_cast<int>(std::get<2>(track)) << std::endl;
+        // }
 
         for (const auto& track : trackList) {
             // Makes hexcode neater, but also prevents track 0's error code being 255
@@ -825,14 +849,22 @@ struct TrackParser {
 
         handleMIDIHeader(); // Add header
         finalizeMIDIFile();
-        std::cout << "BMS file converted." << std::endl;
+        std::cout << "BMS file converted" << std::endl;
 
+    }
+
+    void printTrackInstruments() {
+        for (const auto& instrument : trackInstruments) {
+            uint8_t trackNum = std::get<0>(instrument);
+            uint8_t program = std::get<1>(instrument);
+            std::cout << "TrackNum: " << std::dec << static_cast<int>(trackNum) << ", Program: " << std::dec << static_cast<int>(program) << std::endl;
+        }
     }
 };
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <filename> [--instruments]" << std::endl;
         return 1;
     }
 
@@ -863,6 +895,13 @@ int main(int argc, char* argv[]) {
     parser.hexData = hexData;
     parser.outputFile = std::move(outputFile);
     parser.init();
+
+    // Check if the --instruments argument is present
+    if (argc >= 3 && std::string(argv[2]) == "--instruments") {
+        // Call the printTrackInstruments function
+        std::cout << "Track Instruments:" << std::endl;
+        parser.printTrackInstruments();
+    }
 
     return 0;
 }
