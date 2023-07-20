@@ -4,6 +4,10 @@ A BMS to MIDI converter
 Currently only developed for Twilight Princess. May not work with other games BMS files.
 ##
 Build with gcc's g++, run with exe + filename_of_bms.bms
+
+If you do not have the BMS sequence files you can decrypt the .arc with:
+- [yaz0dec](https://github.com/mrysav/szstools/blob/master/yaz0dec.cpp)
+- [rarcdump](https://github.com/mrysav/szstools/blob/master/rarcdump.cpp)
 ##
 Thanks:
 - [XAYRGA](https://github.com/XAYRGA) - JAudio Keys
