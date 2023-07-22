@@ -172,7 +172,7 @@ struct TrackParser {
                             throw;
                         }
                 };
-
+                voiceToNote[voice - 1] = note;
                 onEvent();
                 handleNoteOn(note, velocity);
             } else if (status_byte == WAIT_8) {
@@ -181,7 +181,6 @@ struct TrackParser {
             } else if (status_byte < 0x88) {
                 // Note Off Event
                 uint8_t voice = status_byte & ~0x80;
-
                 onEvent();
                 handleNoteOff(voice);
             } else {
@@ -646,38 +645,16 @@ struct TrackParser {
 
     void handleNoteOn(uint8_t note, uint8_t velocity) {
 
-        // Find if the same note is already being played
-        for (uint8_t voice = 0; voice < 8; ++voice) {
-            if (voiceToNote[voice] == note) {
-                // Same note is already being played, trigger note-off event
-                handleNoteOff(voice + 1);
-                break;
-            }
-        }
+        // Create MIDI note-on event
+        uint8_t statusByte = 0x90 + statusNum;
 
-        // Find an available voice ID
-        uint8_t voice = 0;
-        for (; voice < 8; ++voice) {
-            if (voiceToNote[voice] == 0) {
-                // Available voice ID found, assign the note
-                voiceToNote[voice] = note;
-                break;
-            }
-        }
+        // Create the MIDI note-on event data
+        std::vector<unsigned char> eventData = calculateDeltaTime();  // Delta time
+        eventData.push_back(statusByte);
+        eventData.push_back(note);
+        eventData.push_back(velocity);
 
-        // Check if an available voice ID was found
-        if (voice < 8) {
-            // Create MIDI note-on event
-            uint8_t statusByte = 0x90 + statusNum;
-
-            // Create the MIDI note-on event data
-            std::vector<unsigned char> eventData = calculateDeltaTime();  // Delta time
-            eventData.push_back(statusByte);
-            eventData.push_back(note);
-            eventData.push_back(velocity);
-
-            writeMIDIData(eventData);
-        }
+        writeMIDIData(eventData);
     }
 
     void handleNoteOff(uint8_t voice) {
@@ -685,10 +662,10 @@ struct TrackParser {
         // Validate voice ID
         if (voice > 0 && voice <= 8) {
             // Retrieve the note being played by the specified voice
-            uint8_t note = voiceToNote[voice - 1];
+            uint8_t note = voiceToNote[voice-1];
 
             // Reset the voice ID to indicate it's available
-            voiceToNote[voice - 1] = 0;
+            voiceToNote[voice-1] = 0;
 
             // Create MIDI note-off event
             uint8_t statusByte = 0x80 + statusNum;
@@ -700,6 +677,8 @@ struct TrackParser {
             eventData.push_back(0x40);  // Velocity is set to 0 for note-off
 
             writeMIDIData(eventData);
+        } else {
+            std::cout << "! ERROR: Unable to handle voice off ID: 0x" << std::hex << static_cast<int>(voice) << " !" << std::endl;
         }
     }
 
