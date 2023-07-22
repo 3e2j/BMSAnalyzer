@@ -540,7 +540,7 @@ struct TrackParser {
     uint32_t accumulatedWaitTime = 0;
     uint32_t previousEventTimestamp = 0;
 
-    std::vector<std::tuple<uint8_t, uint8_t, bool>> midiMappings; // Status Num, Program, Has pitch changes (occupied)
+    std::vector<std::tuple<uint8_t, uint8_t>> midiMappings;
     int currentMidiMapping;
     uint8_t statusNum = 0x00;
 
@@ -605,7 +605,7 @@ struct TrackParser {
         uint8_t existingStatusNum = 0x00;
 
         for (const auto& mapping : midiMappings) {
-            if (std::get<1>(mapping) == program && std::get<2>(mapping) == false) {
+            if (std::get<1>(mapping) == program) {
                 mappingExists = true;
                 existingStatusNum = std::get<0>(mapping);
                 break;
@@ -617,13 +617,17 @@ struct TrackParser {
             uint8_t newStatusNum = midiMappings.empty() ? 0x00 : (std::get<0>(midiMappings.back()) + 1);
 
             // Add the MIDI mapping to the global list
-            midiMappings.push_back(std::make_tuple(newStatusNum, program, false));
+            midiMappings.push_back(std::make_tuple(newStatusNum, program));
 
             // Use the newly determined statusNum
             statusNum = newStatusNum;
         } else {
             // Use the existing statusNum from the list
             statusNum = existingStatusNum;
+        }
+
+        if (statusNum >= 0x10) {
+            std::cout << "! ERROR: Status Num exceeded 16 !" << std::endl;
         }
 
         trackInstruments.push_back(std::make_tuple(trackNum, program));
@@ -743,15 +747,6 @@ struct TrackParser {
                 0x00, statusByte, 0x65, 0x7f          // pitch fine end
                 });
 
-            // Set the statusNum to be 'occupied'
-            for (auto& mapping : midiMappings) {
-                if (std::get<0>(mapping) == statusNum) {
-                    // Set the bool value to true for the found mapping
-                    std::get<2>(mapping) = true;
-                    break;
-                }
-            }
-
             writeMIDIData(pitchSetup);
             isPitchSetup = true;
         }
@@ -839,7 +834,6 @@ struct TrackParser {
         handleMIDIHeader(); // Add header
         finalizeMIDIFile();
         std::cout << "BMS file converted" << std::endl;
-
     }
 
     void printTrackInstruments() {
